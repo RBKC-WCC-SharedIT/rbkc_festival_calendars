@@ -1,0 +1,171 @@
+<?php
+/**
+ * @file contains hooks and utility functions for RBKC calendar
+ */
+
+include_once drupal_get_path('module', 'rbkc_festival_calendars') . '/rbkc_festival_calendars_theme.inc';
+
+//todo - create blocks for each instance of the calendar that can be added to themes in rbkc_domain_config
+/**
+ * Returns a rendered calendar
+ */
+function rbkc_festival_calendars_initialise($view_name, $interval = 'month', $display = 'default', $hide_past_dates = TRUE) {
+
+  $raw_events = views_get_view_result($view_name);
+  $view_display_field_names = _rbkc_festival_calendars_get_views_field_names($view_name, $display);
+
+  if ($raw_events) {
+
+    $events = [];
+
+    foreach ($raw_events as $event) {
+
+      $view_fields = _rbkc_festival_calendars_get_view_fields($view_display_field_names, $event);
+      $event_fields = $event->_field_data['nid']['entity'];
+      $url = _rbkc_festival_calendars_get_url($event);
+      $name = _rbkc_festival_calendars_get_name($event_fields);
+      $raw_dateranges = _rbkc_festival_calendars_get_dates($event_fields);
+      $today = new DateTime();
+      $today_string = $today->format('Y-m-d 00:00:00');
+      $date_ranges = _rbkc_festival_calendars_create_date_ranges($raw_dateranges, $hide_past_dates, $today_string);
+
+      $events[] = new Event($date_ranges, $name, $url, $view_fields);
+    }
+
+    $event_collection = new EventCollection($events);
+
+    $calendar = new Calendar($event_collection);
+
+    //todo - create blocks for each instance of the calendar that can be added to themes in rbkc_domain_config
+    $calendar->print_calendar_by($interval);
+
+  }
+}
+
+/**
+ * Returns an array containing ranges of date objects
+ */
+function _rbkc_festival_calendars_create_date_ranges($raw_dateranges, $hide_past_dates, $today_string) {
+  $date_ranges = [];
+  if ($hide_past_dates) {
+    foreach ($raw_dateranges as $key => $raw_daterange) {
+      if (! $raw_daterange['date_to'] < $today_string) {
+        if ($raw_daterange['date_from'] < $today_string) {
+          $raw_daterange['date_from'] = $today_string;
+        }
+        $date_ranges[] = _rbkc_festival_calendars_create_date_range($raw_daterange);
+      }
+    }
+  }
+  else {
+    foreach ($raw_dateranges as $key => $raw_daterange) {
+      $date_ranges[] = _rbkc_festival_calendars_create_date_range($raw_daterange);
+    }
+  }
+  return $date_ranges;
+}
+
+/**
+ * Creates a range of date objects
+ */
+function _rbkc_festival_calendars_create_date_range($raw_daterange) {
+  $range = [];
+  $range['date_from'] = new CalDate($raw_daterange['date_from']);
+  $range['date_to'] = new CalDate($raw_daterange['date_to']);
+  $range['time_from'] = new CalTime($raw_daterange['time_from']);
+  $range['time_to'] = new CalTime($raw_daterange['time_to']);
+  return $range;
+}
+
+/**
+ * Returns an array containing the markup of the fields used in this view's display
+ */
+function _rbkc_festival_calendars_get_view_fields($field_names, $event) {
+  $view_fields = Array();
+  foreach ($field_names as $field_name_array) {
+    $field_name = $field_name_array['raw_fieldname'];
+    if (array_key_exists($field_name, $event)) {
+      $field = reset($event->$field_name);
+      $return_array = Array(
+        'header' => $field_name_array['nice_name'],
+      );
+      if ($field) {
+        $return_array['markup'] = $field['rendered']['#markup'];
+      }
+      else {
+        $return_array['markup'] = '';
+      }
+      $view_fields[str_replace('field_', '', $field_name)] = $return_array;
+    }
+  }
+  return $view_fields;
+}
+
+/**
+ * Returns an array containing the machine names of fields used in this view's display
+ */
+function _rbkc_festival_calendars_get_views_field_names($view_name, $display) {
+  $view = views_get_view($view_name);
+  $view_raw_field_names = array_keys($view->display[$display]->display_options['fields']);
+  $view_display_field_names = array_map(function($fieldname) {
+    return array(
+      'raw_fieldname' => 'field_' . $fieldname,
+      'nice_name' => str_replace('field', '', str_replace("_", " ", $fieldname)),
+    );
+  }, $view_raw_field_names);
+  return $view_display_field_names;
+}
+
+/**
+ * Returns an array representing a range of ISO date strings
+ */
+function _rbkc_festival_calendars_create_date_array($dates, $times) {
+  return array(
+    'date_from' => $dates['value'],
+    'date_to' => $dates['value2'],
+    'time_from' => $times['value'],
+    'time_to' => $times['value2'],
+  );
+}
+
+/**
+ * Returns an array of arrays representing individual instances of this event
+ */
+function _rbkc_festival_calendars_get_dates($event_fields) {
+  $event_dates = [];
+  $primary_dates = $event_fields->field_event_date[LANGUAGE_NONE];
+  $primary_times = $event_fields->field_event_times['und'][0];
+  foreach ($primary_dates as $date) {
+    $event_dates[] = _rbkc_festival_calendars_create_date_array($date, $primary_times);
+  }
+
+  // get additional dates and times from repeatable Paragraphs field
+  if (property_exists($event_fields, 'field_additional_dates_and_times')) {
+    $additional_dates_times = $event_fields->field_additional_dates_and_times[LANGUAGE_NONE];
+    foreach ($additional_dates_times as $date_entry) {
+      $item_id = $date_entry['value'];
+      $collection = entity_metadata_wrapper('paragraphs_item', $item_id);
+      $additional_dates = $collection->field_event_date;
+      $additional_times = $collection->field_event_times->value();
+      foreach ($additional_dates as $date) {
+        $event_dates[] = _rbkc_festival_calendars_create_date_array($date->value(), $additional_times);
+      }
+
+    }
+  }
+  return $event_dates;
+}
+
+/*
+ * Returns the path alias of the event page
+ */
+function _rbkc_festival_calendars_get_url($event_fields) {
+  return drupal_get_path_alias('node/' . $event_fields->nid);
+}
+
+/**
+ * Returns the short name of the event
+ */
+function _rbkc_festival_calendars_get_name($event_fields) {
+  return $event_fields->field_short_title[LANGUAGE_NONE][0]['safe_value'];
+}

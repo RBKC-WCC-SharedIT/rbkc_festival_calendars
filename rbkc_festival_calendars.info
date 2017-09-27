@@ -1,0 +1,9 @@
+name = RBKC Festival Calendars
+description = Creates calendars based on views
+core = 7.x
+package = RBKC
+
+files[] = classes/CalDate.inc
+files[] = classes/Calendar.inc
+files[] = classes/Event.inc
+files[] = classes/EventCollection.inc
